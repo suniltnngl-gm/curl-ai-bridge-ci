@@ -55,10 +55,10 @@ jobs:
           set -euo pipefail
           source_sha="$(git rev-parse HEAD)"
           {
-            echo "## Source provenance"
-            echo "- Repository: `suniltnngl-gm/curl-ai-bridge`"
-            echo "- Requested ref: `${REQUESTED_SOURCE_REF}`"
-            echo "- Resolved commit: `${source_sha}`"
+            printf '%s\n' "## Source provenance"
+            printf '%s\n' "- Repository: suniltnngl-gm/curl-ai-bridge"
+            printf '%s\n' "- Requested ref: ${REQUESTED_SOURCE_REF}"
+            printf '%s\n' "- Resolved commit: ${source_sha}"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "Testing source commit ${source_sha}"
 
