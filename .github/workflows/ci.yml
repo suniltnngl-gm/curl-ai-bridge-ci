@@ -67,6 +67,15 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      - name: Run Bash+cURL provider adapter tests
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v curl
+          command -v jq
+          bash tests/bash/run.sh
+
       - name: Validate JavaScript module syntax
         working-directory: source
         shell: bash
