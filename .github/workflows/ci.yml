@@ -1,0 +1,110 @@
+name: Private source CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch, tag, or commit SHA in suniltnngl-gm/curl-ai-bridge
+        required: true
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-source-ci-${{ inputs.source_ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-and-test:
+    name: Validate and test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20, 22]
+
+    steps:
+      - name: Require private source read token
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ secrets.MAINTAINER_REPO_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SOURCE_TOKEN}" ]; then
+            echo "::error::Add MAINTAINER_REPO_READ_TOKEN as an Actions secret in this repository."
+            exit 1
+          fi
+
+      - name: Check out private source
+        uses: actions/checkout@v4
+        with:
+          repository: suniltnngl-gm/curl-ai-bridge
+          ref: ${{ inputs.source_ref }}
+          token: ${{ secrets.MAINTAINER_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Record source provenance
+        working-directory: source
+        shell: bash
+        env:
+          REQUESTED_SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          {
+            echo "## Source provenance"
+            echo "- Repository: `suniltnngl-gm/curl-ai-bridge`"
+            echo "- Requested ref: `${REQUESTED_SOURCE_REF}`"
+            echo "- Resolved commit: `${source_sha}`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Testing source commit ${source_sha}"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Validate JavaScript module syntax
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find server scripts tests -type f -name '*.mjs' -print0)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No JavaScript modules found to validate."
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            node --check "$file"
+          done
+          echo "Validated ${#files[@]} JavaScript modules."
+
+      - name: Validate JSON configuration
+        working-directory: source
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; for (const file of ['mcp.json', 'plugin.json']) { JSON.parse(fs.readFileSync(file, 'utf8')); console.log('Valid JSON:', file); }"
+
+      - name: Scan production files for high-confidence credential patterns
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pattern='(-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|sk-[A-Za-z0-9_-]{32,})'
+          if git grep -nEI "$pattern" -- server scripts mcp.json plugin.json .env.example Dockerfile; then
+            echo "::error::Potential hard-coded credential found in production source/configuration."
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then
+              echo "::error::Credential scan failed with git-grep exit code $status."
+              exit "$status"
+            fi
+          fi
+          echo "No high-confidence credential patterns found in production source/configuration."
+
+      - name: Run complete test suite
+        working-directory: source
+        run: node scripts/test-all.mjs
